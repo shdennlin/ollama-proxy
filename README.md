@@ -6,7 +6,10 @@ A simple proxy server for Ollama that logs all requests and responses to CSV for
 
 - **Complete Request Proxying**: Forwards all requests to Ollama server
 - **Comprehensive CSV Logging**: Tracks 20+ metrics per request
+- **Structured Console Logging**: Winston-based logging with levels and formatting
 - **Auto-append Logging**: Continuously appends to CSV file
+- **Log Rotation**: Daily rotating log files with automatic cleanup
+- **Security Filtering**: Automatic masking of sensitive data
 - **System Monitoring**: CPU and memory usage tracking
 - **Error Handling**: Robust error handling and recovery
 - **Health Monitoring**: Built-in health check endpoint
@@ -49,6 +52,7 @@ OLLAMA_URL=http://localhost:11434  # Ollama server URL
 HOST=localhost                     # Server host (use 0.0.0.0 for public access)
 PORT=3001                          # Proxy server port
 LOG_PATH=./logs                    # Log directory
+LOG_LEVEL=info                     # Log level (error, warn, info, debug)
 ```
 
 **Host Configuration:**

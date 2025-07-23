@@ -4,6 +4,7 @@ const axios = require('axios');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const CSVLogger = require('./logger');
+const { logger, logRequest, logResponse, logError, logPerformance } = require('./winston-logger');
 
 class OllamaProxy {
   constructor() {
@@ -56,8 +57,12 @@ class OllamaProxy {
   }
 
   async proxyRequest(req, res) {
-    console.log(`[PROXY] Received ${req.method} request to ${req.path}`);
-    console.log(`[PROXY] Request body:`, JSON.stringify(req.body, null, 2));
+    // Log incoming request with Winston
+    logRequest(req, {
+      endpoint: req.path,
+      bodySize: JSON.stringify(req.body || {}).length,
+      concurrentRequests: this.concurrentRequests
+    });
     
     const logData = {
       request_id: req.requestId,
@@ -75,7 +80,11 @@ class OllamaProxy {
       
       // Prepare Ollama request
       const ollamaUrl = `${this.ollamaBaseUrl}${req.path}`;
-      console.log(`[PROXY] Forwarding to Ollama:`, ollamaUrl);
+      logger.debug('Forwarding to Ollama', { 
+        requestId: req.requestId,
+        ollamaUrl,
+        method: req.method
+      });
       const ollamaConfig = {
         method: req.method,
         url: ollamaUrl,
@@ -88,20 +97,29 @@ class OllamaProxy {
       };
 
       const processingStartTime = Date.now();
-      console.log(`[PROXY] Making request to Ollama...`);
-      console.log(`[PROXY] Axios config:`, JSON.stringify({...ollamaConfig, data: '...'}, null, 2));
+      logger.debug('Making request to Ollama', {
+        requestId: req.requestId,
+        timeout: ollamaConfig.timeout,
+        dataSize: JSON.stringify(ollamaConfig.data || {}).length
+      });
       
       let response;
       try {
         response = await axios(ollamaConfig);
       } catch (axiosError) {
-        console.error(`[PROXY] Axios error:`, axiosError.message);
-        console.error(`[PROXY] Axios error code:`, axiosError.code);
+        logError(axiosError, req, {
+          errorCode: axiosError.code,
+          ollamaUrl
+        });
         throw axiosError;
       }
       
       const processingEndTime = Date.now();
-      console.log(`[PROXY] Got response from Ollama:`, response.status);
+      logger.debug('Got response from Ollama', {
+        requestId: req.requestId,
+        status: response.status,
+        responseSize: JSON.stringify(response.data).length
+      });
 
       // Extract metrics from response
       const responseData = response.data;
@@ -128,21 +146,51 @@ class OllamaProxy {
         res.set(key, response.headers[key]);
       });
       res.send(responseData);
+      
+      // Log successful response
+      logResponse(req, res, responseData, {
+        model: logData.model,
+        inputTokens: logData.input_tokens,
+        outputTokens: logData.output_tokens,
+        queueTime: logData.queue_time_ms,
+        processingTime: logData.processing_time_ms
+      });
 
     } catch (error) {
       logData.error_message = error.message;
       logData.http_status = error.response?.status || 500;
       logData.total_time_ms = Date.now() - req.startTime;
       
-      console.error('Proxy error:', error.message);
-      res.status(logData.http_status).json({
+      logError(error, req, {
+        phase: 'proxy_request',
+        endpoint: req.path
+      });
+      const errorResponse = {
         error: 'Proxy error',
         message: error.message,
         request_id: req.requestId
+      };
+      res.status(logData.http_status).json(errorResponse);
+      
+      // Log error response
+      logResponse(req, res, errorResponse, {
+        errorType: error.name,
+        errorCode: error.code
       });
     } finally {
-      // Log the request
+      // Log the request to CSV
       this.logger.log(logData);
+      
+      // Log performance metrics
+      if (logData.total_time_ms) {
+        logPerformance(req, {
+          queueTime: logData.queue_time_ms,
+          processingTime: logData.processing_time_ms,
+          totalTime: logData.total_time_ms,
+          model: logData.model,
+          tokens: logData.total_tokens
+        });
+      }
     }
   }
 
@@ -182,10 +230,14 @@ class OllamaProxy {
 
   start() {
     this.app.listen(this.port, this.host, () => {
-      console.log(`🚀 Ollama Proxy Server running on http://${this.host}:${this.port}`);
-      console.log(`📊 Logs will be saved to: ${this.logger.logFile}`);
-      console.log(`🔗 Proxying to: ${this.ollamaBaseUrl}`);
-      console.log(`💡 Usage: Send requests to http://${this.host}:${this.port}/api/generate`);
+      logger.info('🚀 Ollama Proxy Server started', {
+        host: this.host,
+        port: this.port,
+        csvLogFile: this.logger.logFile,
+        ollamaBaseUrl: this.ollamaBaseUrl,
+        logLevel: process.env.LOG_LEVEL || 'info'
+      });
+      logger.info(`💡 Usage: Send requests to http://${this.host}:${this.port}/api/generate`);
     });
   }
 }
